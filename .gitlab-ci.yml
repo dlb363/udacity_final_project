@@ -1,0 +1,78 @@
+default:
+  image: ubuntu:latest
+
+deploy-prod:
+  only:
+    - main
+  stage: deploy
+  before_script:
+    - ls -la
+    - pwd
+    - 'which ssh-agent || ( apt-get update -y && apt-get install openssh-client -y )'
+    - eval $(ssh-agent -s)
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - cat $SSH_KEY_EC2
+    - echo "$(cat $SSH_KEY_EC2)" >> ~/.ssh/ssh-key.pem
+    - chmod 400 ~/.ssh/ssh-key.pem
+    - cat ~/.ssh/ssh-key.pem
+    - echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
+    - apt-get update -y
+    - apt-get -y install rsync
+  script:
+    - >- 
+      ssh -i ~/.ssh/ssh-key.pem ubuntu@$EC2_ADDRESS \
+      'git config --global --replace-all user.name "Devon Bancroft"
+      && git config --global --replace-all user.email "devonbancroft1@gmail.com"
+      '
+    - >-
+      ssh -i ~/.ssh/ssh-key.pem ubuntu@$EC2_ADDRESS \
+      'export GITLAB_USERNAME=$GITLAB_USERNAME && export GITLAB_PASSWORD=$GITLAB_PASSWORD &&
+      git config --global credential.helper "store --file=.git-credentials" &&
+      echo "https://$GITLAB_USERNAME:$GITLAB_PASSWORD@gitlab.com" > .git-credentials;'
+      
+    - >-
+      ssh -i ~/.ssh/ssh-key.pem ubuntu@$EC2_ADDRESS \
+      'if [ -d citibike_etl ]; then
+        echo "found directory";
+        cd citibike_etl;
+        git fetch;
+        git status;
+        git restore .env;
+        FILES_CHANGED=$(git diff main..origin/main | grep -E "requirements.txt|Dockerfile|docker-compose.yml");
+        echo "files_change = $FILES_CHANGED";
+        git pull --rebase;
+        git status;
+        sed -i s:%AIRFLOW_UID%:"$(id -u)":g .env;
+        sed -i s:%AIRFLOW_GID%:0:g .env;
+        sed -i s:%_AIRFLOW_WWW_USER_USERNAME%:"$_AIRFLOW_WWW_USER_USERNAME":g .env;
+        sed -i s:%_AIRFLOW_WWW_USER_PASSWORD%:"$_AIRFLOW_WWW_USER_PASSWORD":g .env;
+        export FILES_CHANGED="$FILES_CHANGED";
+      else
+        echo "cloning dir";
+        export GITLAB_USERNAME="$GITLAB_USERNAME";
+        export GITLAB_PASSWORD="$GITLAB_PASSWORD";
+        git config --global credential.helper "store --file=.git-credentials";
+        echo "https://$GITLAB_USERNAME:$GITLAB_PASSWORD@gitlab.com" > .git-credentials;
+        git clone https://gitlab.com/devonbancroft/citibike_etl.git;
+        cd citibike_etl;
+        ls -la;
+        chmod 777 logs;
+        sed -i s:%AIRFLOW_UID%:"$(id -u)":g .env;
+        sed -i s:%AIRFLOW_GID%:0:g .env;
+        sed -i s:%_AIRFLOW_WWW_USER_USERNAME%:"$_AIRFLOW_WWW_USER_USERNAME":g .env;
+        sed -i s:%_AIRFLOW_WWW_USER_PASSWORD%:"$_AIRFLOW_WWW_USER_PASSWORD":g .env;
+        docker-compose up airflow-init;
+      fi;
+      if [[ $(docker ps | grep airflow) && ! -z "$FILES_CHANGED" ]]; then 
+        echo "docker running and files changed";
+        docker-compose down; 
+        docker build . --tag extending_airflow:latest;
+        docker-compose up -d --build;
+      elif  [[ $(docker ps | grep airflow) ]]; then
+        echo "docker running and up-to-date";
+      else
+        echo "docker not running";
+        docker build . --tag extending_airflow:latest;
+        docker-compose up -d --build; 
+      fi;'
