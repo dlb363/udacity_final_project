@@ -1,5 +1,0 @@
-host="default-preview.223701873763.us-east-1.redshift-serverless.amazonaws.com"
-port="5439"
-dbname="dev"
-user="admin"
-password="Clownbroomkiteup1!"
