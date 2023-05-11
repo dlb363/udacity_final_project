@@ -1,2 +1,0 @@
-# udacity_final_project
-udacity_final_project
